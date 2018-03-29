@@ -22,35 +22,37 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
             IStringLocalizer<CloudscribeCore> localizer
             )
         {
-            systemInfo = systemInfoManager;
-            uiOptions = uiOptionsAccessor.Value;
-            sr = localizer;
+            _systemInfo = systemInfoManager;
+            _uiOptions = uiOptionsAccessor.Value;
+            _sr = localizer;
 
         }
 
-        private SystemInfoManager systemInfo;
-        private UIOptions uiOptions;
-        private IStringLocalizer sr;
+        private SystemInfoManager _systemInfo;
+        private UIOptions _uiOptions;
+        private IStringLocalizer _sr;
 
-        [Authorize(Policy = "AdminPolicy")]
+        [Authorize(Policy = PolicyConstants.AdminPolicy)]
         public IActionResult Index()
         {
-            ViewData["Title"] = sr["System Information"];
-            
-            var serverInfo = new SystemInfoViewModel();
-            serverInfo.Name = this.HttpContext.Request.Host.Value;
-            if(HttpContext.Connection.LocalIpAddress != null)
+            ViewData["Title"] = _sr["System Information"];
+
+            var serverInfo = new SystemInfoViewModel
+            {
+                Name = this.HttpContext.Request.Host.Value
+            };
+            if (HttpContext.Connection.LocalIpAddress != null)
             {
                 serverInfo.LocalAddress = HttpContext.Connection.LocalIpAddress.ToString();
                 
             }
             
-            serverInfo.OperatingSystem = systemInfo.OperatingSystem;
-            serverInfo.Runtime = systemInfo.Runtime;
-            serverInfo.EnvironmentName = systemInfo.EnvironmentName;
-            serverInfo.DatabasePlatform = systemInfo.DatabasePlatform;
-            serverInfo.CloudscribeCoreVersion = systemInfo.CloudscribeCoreVersion;
-            serverInfo.OtherVersions = systemInfo.GetOtherVersions();
+            serverInfo.OperatingSystem = _systemInfo.OperatingSystem;
+            serverInfo.Runtime = _systemInfo.Runtime;
+            serverInfo.EnvironmentName = _systemInfo.EnvironmentName;
+            serverInfo.DatabasePlatform = _systemInfo.DatabasePlatform;
+            serverInfo.CloudscribeCoreVersion = _systemInfo.CloudscribeCoreVersion;
+            serverInfo.OtherVersions = _systemInfo.GetOtherVersions();
             
             return View(serverInfo);
         }

@@ -2,13 +2,13 @@
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 // Author:					Joe Audette
 // Created:					2014-10-26
-// Last Modified:			2018-01-31
+// Last Modified:			2018-03-14
 // 
 
 using cloudscribe.Core.Models;
 using cloudscribe.Core.Web.Components;
 using cloudscribe.Core.Web.ViewModels.SiteSettings;
-using cloudscribe.Messaging.Email;
+using cloudscribe.Email;
 using cloudscribe.Web.Common;
 using cloudscribe.Web.Common.Extensions;
 using cloudscribe.Web.Common.Razor;
@@ -19,19 +19,21 @@ using Microsoft.AspNetCore.Mvc.Rendering;
 using Microsoft.Extensions.Localization;
 using Microsoft.Extensions.Options;
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
 
 namespace cloudscribe.Core.Web.Controllers.Mvc
 {
-    [Authorize(Policy = "AdminPolicy")]
+    [Authorize(Policy = PolicyConstants.AdminPolicy)]
     public class SiteAdminController : Controller
     {
         public SiteAdminController(
             SiteManager siteManager,
             GeoDataManager geoDataManager,
-            ISmtpOptionsProvider smtpOptionsProvider,
+            ISiteAcountCapabilitiesProvider siteCapabilities,
+            IEnumerable<IEmailSender> allEmailSenders,
             IOptions<MultiTenantOptions> multiTenantOptions,
             IOptions<UIOptions> uiOptionsAccessor,
             IThemeListBuilder layoutListBuilder,
@@ -40,38 +42,38 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
             IOptions<RequestLocalizationOptions> localizationOptions
             )
         {
-            if (siteManager == null) { throw new ArgumentNullException(nameof(siteManager)); }
-            if (geoDataManager == null) { throw new ArgumentNullException(nameof(geoDataManager)); }
             if (multiTenantOptions == null) { throw new ArgumentNullException(nameof(multiTenantOptions)); }
 
-            this.multiTenantOptions = multiTenantOptions.Value;
-            
-            this.siteManager = siteManager;
-            this.geoDataManager = geoDataManager;
-            uiOptions = uiOptionsAccessor.Value;
-            this.layoutListBuilder = layoutListBuilder;
-            sr = localizer;
-            tzHelper = timeZoneHelper;
-            this.smtpOptionsProvider = smtpOptionsProvider;
-            localization = localizationOptions.Value;
+            _multiTenantOptions = multiTenantOptions.Value;
+            _siteManager = siteManager ?? throw new ArgumentNullException(nameof(siteManager));
+            _geoDataManager = geoDataManager ?? throw new ArgumentNullException(nameof(geoDataManager));
+            _uiOptions = uiOptionsAccessor.Value;
+            _layoutListBuilder = layoutListBuilder;
+            _sr = localizer;
+            _tzHelper = timeZoneHelper;
+            _siteCapabilities = siteCapabilities;
+            _localization = localizationOptions.Value;
+            _emailSenders = allEmailSenders;
         }
 
-        private SiteManager siteManager;
-        private GeoDataManager geoDataManager;
-        private MultiTenantOptions multiTenantOptions;
-        private ISmtpOptionsProvider smtpOptionsProvider;
-        //private ITriggerStartup startup
-        private IStringLocalizer sr;
-        private IThemeListBuilder layoutListBuilder;
-        private UIOptions uiOptions;
-        private ITimeZoneHelper tzHelper;
-        private RequestLocalizationOptions localization;
+        private SiteManager _siteManager;
+        private GeoDataManager _geoDataManager;
+        private MultiTenantOptions _multiTenantOptions;
+        private ISiteAcountCapabilitiesProvider _siteCapabilities;
+        private IEnumerable<IEmailSender> _emailSenders;
+
+
+        private IStringLocalizer _sr;
+        private IThemeListBuilder _layoutListBuilder;
+        private UIOptions _uiOptions;
+        private ITimeZoneHelper _tzHelper;
+        private RequestLocalizationOptions _localization;
 
         // GET: /SiteAdmin
         [HttpGet]
         public IActionResult Index()
         {
-            ViewData["Title"] = sr["Site Administration"];
+            ViewData["Title"] = _sr["Site Administration"];
             // this view just has navigation map
             return View();
         }
@@ -80,40 +82,42 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
         [HttpGet]
         public IActionResult Security()
         {
-            ViewData["Title"] = sr["Security Settings"];
+            ViewData["Title"] = _sr["Security Settings"];
             // this view just has navigation map
             return View("Index");
         }
 
 
         [HttpGet]
-        [Authorize(Policy = "ServerAdminPolicy")]
+        [Authorize(Policy = PolicyConstants.ServerAdminPolicy)]
         public async Task<IActionResult> SiteList(int pageNumber = 1, int pageSize = -1)
         {
-            ViewData["Title"] = sr["Site List"];
+            ViewData["Title"] = _sr["Site List"];
 
-            int itemsPerPage = uiOptions.DefaultPageSize_SiteList;
+            int itemsPerPage = _uiOptions.DefaultPageSize_SiteList;
             if (pageSize > 0)
             {
                 itemsPerPage = pageSize;
             }
             
             var filteredSiteId = Guid.Empty; //nothing filtered
-            var sites = await siteManager.GetPageOtherSites(
+            var sites = await _siteManager.GetPageOtherSites(
                 filteredSiteId,
                 pageNumber,
                 itemsPerPage);
-            
-            var model = new SiteListViewModel();
-            model.Sites = sites;
-            
+
+            var model = new SiteListViewModel
+            {
+                Sites = sites
+            };
+
             return View(model);
 
         }
 
         // GET: /SiteAdmin/SiteInfo
         [HttpGet]
-        [Authorize(Policy = "AdminPolicy")]
+        [Authorize(Policy = PolicyConstants.AdminPolicy)]
         public async Task<IActionResult> SiteInfo(
             Guid? siteId,
             int slp = 1)
@@ -122,41 +126,40 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
             ISiteSettings selectedSite;
             if(siteId.HasValue)
             {
-                selectedSite = await siteManager.Fetch(siteId.Value);
+                selectedSite = await _siteManager.Fetch(siteId.Value);
             }
             else
             {
-                selectedSite = await siteManager.Fetch(siteManager.CurrentSite.Id);
+                selectedSite = await _siteManager.Fetch(_siteManager.CurrentSite.Id);
             }
             // only server admin site can edit other sites settings
-            if (selectedSite.Id != siteManager.CurrentSite.Id)
+            if (selectedSite.Id != _siteManager.CurrentSite.Id)
             {
-                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, sr["{0} - Settings"], selectedSite.SiteName);
+                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, _sr["{0} - Settings"], selectedSite.SiteName);
             }
             else
             {
-                ViewData["Title"] = sr["Site Settings"];
+                ViewData["Title"] = _sr["Site Settings"];
             }
-            
-            var model = new SiteBasicSettingsViewModel();
-            model.ReturnPageNumber = slp; // site list page number to return to
-            model.TimeZoneId = selectedSite.TimeZoneId;
-           
 
-            model.SiteId = selectedSite.Id;
-            model.SiteName = selectedSite.SiteName;
-            model.AliasId = selectedSite.AliasId;
-            model.GoogleAnalyticsProfileId = selectedSite.GoogleAnalyticsProfileId;
-            model.AddThisProfileId = selectedSite.AddThisDotComUsername;
-            
-            model.IsClosed = selectedSite.SiteIsClosed;
-            model.ClosedMessage = selectedSite.SiteIsClosedMessage;
-            
-            if (multiTenantOptions.Mode == MultiTenantMode.FolderName)
+            var model = new SiteBasicSettingsViewModel
+            {
+                ReturnPageNumber = slp, // site list page number to return to
+                TimeZoneId = selectedSite.TimeZoneId,
+                SiteId = selectedSite.Id,
+                SiteName = selectedSite.SiteName,
+                AliasId = selectedSite.AliasId,
+                GoogleAnalyticsProfileId = selectedSite.GoogleAnalyticsProfileId,
+                AddThisProfileId = selectedSite.AddThisDotComUsername,
+                IsClosed = selectedSite.SiteIsClosed,
+                ClosedMessage = selectedSite.SiteIsClosedMessage
+            };
+
+            if (_multiTenantOptions.Mode == MultiTenantMode.FolderName)
             {
                 model.SiteFolderName = selectedSite.SiteFolderName;
             }
-            else if (multiTenantOptions.Mode == MultiTenantMode.HostName)
+            else if (_multiTenantOptions.Mode == MultiTenantMode.HostName)
             {
                 model.HostName = selectedSite.PreferredHostName;
             }
@@ -165,46 +168,23 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
             
             
             // can only delete from server admin site/cannot delete server admin site
-            if (siteManager.CurrentSite.IsServerAdminSite)
+            if (_siteManager.CurrentSite.IsServerAdminSite)
             {
-                if (model.SiteId != siteManager.CurrentSite.Id)
+                if (model.SiteId != _siteManager.CurrentSite.Id)
                 {
-                    model.ShowDelete = uiOptions.AllowDeleteChildSites;
+                    model.ShowDelete = _uiOptions.AllowDeleteChildSites;
                 }
             }
 
             PopulateLists(model, selectedSite);
-
-            //model.AvailableThemes = layoutListBuilder.GetAvailableThemes(selectedSite.AliasId);
-            //model.AllTimeZones = tzHelper.GetTimeZoneList().Select(x =>
-            //                  new SelectListItem
-            //                  {
-            //                      Text = x,
-            //                      Value = x,
-            //                      Selected = model.TimeZoneId == x
-            //                  });
-
-            //model.ForcedUICulture = selectedSite.ForcedUICulture;
-            //model.AvailableUICultures = localization.SupportedUICultures
-            //                          .Select(c => new SelectListItem { Value = c.Name, Text = c.Name , Selected = model.ForcedUICulture == c.Name  })
-            //                          .ToList();
-            //model.AvailableUICultures.Insert(0, new SelectListItem { Value = "", Text = sr["Any"] });
-
-            //model.ForcedCulture = selectedSite.ForcedCulture;
-            //model.AvailableCultures = localization.SupportedCultures
-            //                          .Select(c => new SelectListItem { Value = c.Name, Text = c.Name, Selected = model.ForcedCulture == c.Name })
-            //                          .ToList();
-            //model.AvailableCultures.Insert(0, new SelectListItem { Value = "", Text = sr["Any"] });
-
-
-
+            
             return View(model);
         }
 
         private void PopulateLists(SiteBasicSettingsViewModel model, ISiteSettings selectedSite)
         {
-            model.AvailableThemes = layoutListBuilder.GetAvailableThemes(selectedSite.AliasId);
-            model.AllTimeZones = tzHelper.GetTimeZoneList().Select(x =>
+            model.AvailableThemes = _layoutListBuilder.GetAvailableThemes(selectedSite.AliasId);
+            model.AllTimeZones = _tzHelper.GetTimeZoneList().Select(x =>
                               new SelectListItem
                               {
                                   Text = x,
@@ -213,50 +193,50 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
                               });
 
             model.ForcedUICulture = selectedSite.ForcedUICulture;
-            model.AvailableUICultures = localization.SupportedUICultures
+            model.AvailableUICultures = _localization.SupportedUICultures
                                       .Select(c => new SelectListItem { Value = c.Name, Text = c.Name, Selected = model.ForcedUICulture == c.Name })
                                       .ToList();
-            model.AvailableUICultures.Insert(0, new SelectListItem { Value = "", Text = sr["Any"] });
+            model.AvailableUICultures.Insert(0, new SelectListItem { Value = "", Text = _sr["Any"] });
 
             model.ForcedCulture = selectedSite.ForcedCulture;
-            model.AvailableCultures = localization.SupportedCultures
+            model.AvailableCultures = _localization.SupportedCultures
                                       .Select(c => new SelectListItem { Value = c.Name, Text = c.Name, Selected = model.ForcedCulture == c.Name })
                                       .ToList();
-            model.AvailableCultures.Insert(0, new SelectListItem { Value = "", Text = sr["Any"] });
+            model.AvailableCultures.Insert(0, new SelectListItem { Value = "", Text = _sr["Any"] });
         }
 
         // Post: /SiteAdmin/SiteInfo
         [HttpPost]
         [ValidateAntiForgeryToken]
-        [Authorize(Policy = "AdminPolicy")]
+        [Authorize(Policy = PolicyConstants.AdminPolicy)]
         public async Task<ActionResult> SiteInfo(SiteBasicSettingsViewModel model)
         {
             // can only delete from server admin site/cannot delete server admin site
-            if (siteManager.CurrentSite.IsServerAdminSite)
+            if (_siteManager.CurrentSite.IsServerAdminSite)
             {
-                if (model.SiteId != siteManager.CurrentSite.Id)
+                if (model.SiteId != _siteManager.CurrentSite.Id)
                 {
-                    model.ShowDelete = uiOptions.AllowDeleteChildSites;
+                    model.ShowDelete = _uiOptions.AllowDeleteChildSites;
                 }
             }
             
             if (model.SiteId == Guid.Empty)
             {
-                this.AlertDanger(sr["oops something went wrong, site was not found."], true);
+                this.AlertDanger(_sr["oops something went wrong, site was not found."], true);
 
                 return RedirectToAction("Index");
             }
 
             ISiteSettings selectedSite = null;
-            if (model.SiteId == siteManager.CurrentSite.Id)
+            if (model.SiteId == _siteManager.CurrentSite.Id)
             {
-                selectedSite = await siteManager.GetCurrentSiteSettings();
-                ViewData["Title"] = sr["Site Settings"];
+                selectedSite = await _siteManager.GetCurrentSiteSettings();
+                ViewData["Title"] = _sr["Site Settings"];
             }
-            else if (siteManager.CurrentSite.IsServerAdminSite)
+            else if (_siteManager.CurrentSite.IsServerAdminSite)
             {
-                selectedSite = await siteManager.Fetch(model.SiteId);
-                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, sr["{0} - Settings"], selectedSite.SiteName);
+                selectedSite = await _siteManager.Fetch(model.SiteId);
+                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, _sr["{0} - Settings"], selectedSite.SiteName);
             }
 
             if (!ModelState.IsValid)
@@ -267,12 +247,12 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
 
             if (selectedSite == null)
             {
-                this.AlertDanger(sr["oops something went wrong."], true);
+                this.AlertDanger(_sr["oops something went wrong."], true);
 
                 return RedirectToAction("Index");
             }
 
-            if (multiTenantOptions.Mode == MultiTenantMode.FolderName)
+            if (_multiTenantOptions.Mode == MultiTenantMode.FolderName)
             {
                 if (
                     ((model.SiteFolderName == null) || (model.SiteFolderName.Length == 0))
@@ -280,12 +260,12 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
                     )
                 {
                     // only the server admin site can be without a folder
-                    ModelState.AddModelError("foldererror", sr["Folder name is required."]);
+                    ModelState.AddModelError("foldererror", _sr["Folder name is required."]);
                     PopulateLists(model, selectedSite);
                     return View(model);
                 }
                 
-                var folderAvailable = await siteManager.FolderNameIsAvailable(selectedSite.Id, model.SiteFolderName);
+                var folderAvailable = await _siteManager.FolderNameIsAvailable(selectedSite.Id, model.SiteFolderName);
                 if (!folderAvailable)
                 {
                     ModelState.AddModelError("foldererror", "The selected folder name is already in use on another site.");
@@ -294,27 +274,27 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
                 }
 
             }
-            else if (multiTenantOptions.Mode == MultiTenantMode.HostName)
+            else if (_multiTenantOptions.Mode == MultiTenantMode.HostName)
             {
                 ISiteHost host;
                 if (!string.IsNullOrEmpty(model.HostName))
                 {
                     model.HostName = model.HostName.Replace("https://", string.Empty).Replace("http://", string.Empty);
 
-                    host = await siteManager.GetSiteHost(model.HostName);
+                    host = await _siteManager.GetSiteHost(model.HostName);
 
                     if (host != null)
                     {
                         if (host.SiteId != selectedSite.Id)
                         {
-                            ModelState.AddModelError("hosterror", sr["The selected host/domain name is already in use on another site."]);
+                            ModelState.AddModelError("hosterror", _sr["The selected host/domain name is already in use on another site."]);
                             PopulateLists(model, selectedSite);
                             return View(model);
                         }
                     }
                     else
                     {
-                        await siteManager.AddHost(
+                        await _siteManager.AddHost(
                             selectedSite.Id,
                             model.HostName);
                     }
@@ -322,8 +302,7 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
                 
                 selectedSite.PreferredHostName = model.HostName;
             }
-
-            //if (model.AliasId.Length > 0) selectedSite.AliasId = model.AliasId;
+            
             selectedSite.SiteName = model.SiteName;
             selectedSite.TimeZoneId = model.TimeZoneId;
             selectedSite.SiteFolderName = model.SiteFolderName;
@@ -335,35 +314,29 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
 
             selectedSite.ForcedCulture = model.ForcedCulture;
             selectedSite.ForcedUICulture = model.ForcedUICulture;
-
-
-            await siteManager.Update(selectedSite);
             
-            this.AlertSuccess(string.Format(sr["Basic site settings for {0} were successfully updated."],
+            await _siteManager.Update(selectedSite);
+            
+            this.AlertSuccess(string.Format(_sr["Basic site settings for {0} were successfully updated."],
                         selectedSite.SiteName), true);
-            // 2017-09-13 given many sites are single tenant
-            // lets not redirect to site list here, I often remove that from the menu when only one tenant is planned
-            //if (siteManager.CurrentSite.IsServerAdminSite)
-            //{
-            //    // just edited from site list so redirect there
-            //    return RedirectToAction("SiteList", new { pageNumber = model.ReturnPageNumber });
-            //}
             
             return RedirectToAction("Index");
         }
 
         // GET: /SiteAdmin/NewSite
         [HttpGet]
-        [Authorize(Policy = "ServerAdminPolicy")]
+        [Authorize(Policy = PolicyConstants.ServerAdminPolicy)]
         public ActionResult NewSite(int slp = 1)
         {
-            ViewData["Title"] = sr["Create New Site"];
+            ViewData["Title"] = _sr["Create New Site"];
 
-            var model = new NewSiteViewModel();
-            model.ReturnPageNumber = slp; //site list return page
-            model.SiteId = Guid.Empty;
-            model.TimeZoneId = siteManager.CurrentSite.TimeZoneId;
-            model.AllTimeZones = tzHelper.GetTimeZoneList().Select(x =>
+            var model = new NewSiteViewModel
+            {
+                ReturnPageNumber = slp, //site list return page
+                SiteId = Guid.Empty,
+                TimeZoneId = _siteManager.CurrentSite.TimeZoneId
+            };
+            model.AllTimeZones = _tzHelper.GetTimeZoneList().Select(x =>
                                new SelectListItem
                                {
                                    Text = x,
@@ -376,7 +349,7 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
 
         [HttpPost]
         [ValidateAntiForgeryToken]
-        [Authorize(Policy = "ServerAdminPolicy")]
+        [Authorize(Policy = PolicyConstants.ServerAdminPolicy)]
         public async Task<ActionResult> NewSite(NewSiteViewModel model)
         {
             ViewData["Title"] = "Create New Site";
@@ -387,25 +360,23 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
             }
             
             bool addHostName = false;
-            var newSite = new SiteSettings();
-            newSite.Id = Guid.NewGuid();
-
-            
-
-            if (multiTenantOptions.Mode == MultiTenantMode.FolderName)
+            var newSite = new SiteSettings
             {
-                
+                Id = Guid.NewGuid()
+            };
 
+            if (_multiTenantOptions.Mode == MultiTenantMode.FolderName)
+            {
                 if (string.IsNullOrEmpty(model.SiteFolderName))
                 {
-                    model.AllTimeZones = tzHelper.GetTimeZoneList().Select(x =>
+                    model.AllTimeZones = _tzHelper.GetTimeZoneList().Select(x =>
                                new SelectListItem
                                {
                                    Text = x,
                                    Value = x,
                                    Selected = model.TimeZoneId == x
                                });
-                    ModelState.AddModelError("foldererror", sr["Folder name is required."]);
+                    ModelState.AddModelError("foldererror", _sr["Folder name is required."]);
                     return View(model);
                 }
                 else
@@ -414,17 +385,17 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
                     model.SiteFolderName = model.SiteFolderName.ToLowerInvariant();
                 }
 
-                bool folderAvailable = await siteManager.FolderNameIsAvailable(newSite.Id, model.SiteFolderName);
+                bool folderAvailable = await _siteManager.FolderNameIsAvailable(newSite.Id, model.SiteFolderName);
                 if (!folderAvailable)
                 {
-                    model.AllTimeZones = tzHelper.GetTimeZoneList().Select(x =>
+                    model.AllTimeZones = _tzHelper.GetTimeZoneList().Select(x =>
                                new SelectListItem
                                {
                                    Text = x,
                                    Value = x,
                                    Selected = model.TimeZoneId == x
                                });
-                    ModelState.AddModelError("foldererror", sr["The selected folder name is already in use on another site."]);
+                    ModelState.AddModelError("foldererror", _sr["The selected folder name is already in use on another site."]);
                     return View(model);
                 }
             }
@@ -434,33 +405,32 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
                 if (!string.IsNullOrEmpty(model.HostName))
                 {
                     model.HostName = model.HostName.Replace("https://", string.Empty).Replace("http://", string.Empty);
-                    host = await siteManager.GetSiteHost(model.HostName);
+                    host = await _siteManager.GetSiteHost(model.HostName);
                     if (host != null)
                     {
-                        model.AllTimeZones = tzHelper.GetTimeZoneList().Select(x =>
+                        model.AllTimeZones = _tzHelper.GetTimeZoneList().Select(x =>
                                new SelectListItem
                                {
                                    Text = x,
                                    Value = x,
                                    Selected = model.TimeZoneId == x
                                });
-                        ModelState.AddModelError("hosterror", sr["The selected host/domain name is already in use on another site."]);
+                        ModelState.AddModelError("hosterror", _sr["The selected host/domain name is already in use on another site."]);
                         return View(model);
                     }
                     addHostName = true;
                 }
-
             }
             
             // only the first site created by setup page should be a server admin site
             newSite.IsServerAdminSite = false;
             newSite.SiteName = model.SiteName;
             
-            var siteNumber = 1 + await siteManager.CountOtherSites(Guid.Empty);
+            var siteNumber = 1 + await _siteManager.CountOtherSites(Guid.Empty);
             newSite.AliasId = $"s{siteNumber}";
             
 
-            if (multiTenantOptions.Mode == MultiTenantMode.FolderName)
+            if (_multiTenantOptions.Mode == MultiTenantMode.FolderName)
             {
                 newSite.SiteFolderName = model.SiteFolderName;
             }
@@ -472,8 +442,8 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
             newSite.SiteIsClosed = model.IsClosed;
             newSite.SiteIsClosedMessage = model.ClosedMessage;
             
-            await siteManager.CreateNewSite(newSite);
-            await siteManager.CreateRequiredRolesAndAdminUser(
+            await _siteManager.CreateNewSite(newSite);
+            await _siteManager.CreateRequiredRolesAndAdminUser(
                 newSite,
                 model.Email,
                 model.LoginName,
@@ -483,10 +453,10 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
             
             if (addHostName)
             {
-                await siteManager.AddHost(newSite.Id, model.HostName);
+                await _siteManager.AddHost(newSite.Id, model.HostName);
             }
             
-            this.AlertSuccess(string.Format(sr["Basic site settings for {0} were successfully created."],
+            this.AlertSuccess(string.Format(_sr["Basic site settings for {0} were successfully created."],
                         newSite.SiteName), true);
             
             return RedirectToAction("SiteList", new { pageNumber = model.ReturnPageNumber });
@@ -498,7 +468,7 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
         {
             var selectedSiteId = Guid.Empty;
             if (siteId.HasValue) { selectedSiteId = siteId.Value; }
-            bool available = await siteManager.AliasIdIsAvailable(selectedSiteId, aliasId);
+            bool available = await _siteManager.AliasIdIsAvailable(selectedSiteId, aliasId);
             return Json(available);
         }
 
@@ -511,7 +481,7 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
             }
             var selectedSiteId = Guid.Empty;
             if (siteId.HasValue) { selectedSiteId = siteId.Value; }
-            bool available = await siteManager.FolderNameIsAvailable(selectedSiteId, siteFolderName);
+            bool available = await _siteManager.FolderNameIsAvailable(selectedSiteId, siteFolderName);
             return Json(available);
         }
 
@@ -520,43 +490,45 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
         {
             var selectedSiteId = Guid.Empty;
             if (siteId.HasValue) { selectedSiteId = siteId.Value; }
-            bool available = await siteManager.HostNameIsAvailable(selectedSiteId, hostName);
+            bool available = await _siteManager.HostNameIsAvailable(selectedSiteId, hostName);
             return Json(available);
         }
 
         [HttpGet]
-        [Authorize(Policy = "AdminPolicy")]
+        [Authorize(Policy = PolicyConstants.AdminPolicy)]
         public async Task<IActionResult> CompanyInfo(
             Guid? siteId,
             int slp = 1)
         {
-            var selectedSite = await siteManager.GetSiteForEdit(siteId);
+            var selectedSite = await _siteManager.GetSiteForEdit(siteId);
             // only server admin site can edit other sites settings
-            if (selectedSite.Id != siteManager.CurrentSite.Id)
+            if (selectedSite.Id != _siteManager.CurrentSite.Id)
             {
-                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, sr["{0} - Company Info"], selectedSite.SiteName);
+                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, _sr["{0} - Company Info"], selectedSite.SiteName);
             }
             else
             {
-                ViewData["Title"] = sr["Company Info"];
+                ViewData["Title"] = _sr["Company Info"];
             }
-            
-            var model = new CompanyInfoViewModel();
-            model.SiteId = selectedSite.Id;
-            model.CompanyName = selectedSite.CompanyName;
-            model.CompanyStreetAddress = selectedSite.CompanyStreetAddress;
-            model.CompanyStreetAddress2 = selectedSite.CompanyStreetAddress2;
-            model.CompanyLocality = selectedSite.CompanyLocality;
-            model.CompanyRegion = selectedSite.CompanyRegion;
-            model.CompanyPostalCode = selectedSite.CompanyPostalCode;
-            model.CompanyCountry = selectedSite.CompanyCountry;
-            model.CompanyPhone = selectedSite.CompanyPhone;
-            model.CompanyFax = selectedSite.CompanyFax;
-            model.CompanyPublicEmail = selectedSite.CompanyPublicEmail;
-            model.CompanyWebsite = selectedSite.CompanyWebsite;
 
-            model.AvailableCountries.Add(new SelectListItem { Text = sr["-Please select-"], Value = "" });
-            var countries = await geoDataManager.GetAllCountries();
+            var model = new CompanyInfoViewModel
+            {
+                SiteId = selectedSite.Id,
+                CompanyName = selectedSite.CompanyName,
+                CompanyStreetAddress = selectedSite.CompanyStreetAddress,
+                CompanyStreetAddress2 = selectedSite.CompanyStreetAddress2,
+                CompanyLocality = selectedSite.CompanyLocality,
+                CompanyRegion = selectedSite.CompanyRegion,
+                CompanyPostalCode = selectedSite.CompanyPostalCode,
+                CompanyCountry = selectedSite.CompanyCountry,
+                CompanyPhone = selectedSite.CompanyPhone,
+                CompanyFax = selectedSite.CompanyFax,
+                CompanyPublicEmail = selectedSite.CompanyPublicEmail,
+                CompanyWebsite = selectedSite.CompanyWebsite
+            };
+
+            model.AvailableCountries.Add(new SelectListItem { Text = _sr["-Please select-"], Value = "" });
+            var countries = await _geoDataManager.GetAllCountries();
             var selectedCountryGuid = Guid.Empty;
             foreach (var country in countries)
             {
@@ -573,7 +545,7 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
 
             if (selectedCountryGuid != Guid.Empty)
             {
-                var states = await geoDataManager.GetGeoZonesByCountry(selectedCountryGuid);
+                var states = await _geoDataManager.GetGeoZonesByCountry(selectedCountryGuid);
                 foreach (var state in states)
                 {
                     model.AvailableStates.Add(new SelectListItem()
@@ -590,23 +562,23 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
         // Post: /SiteAdmin/CompanyInfo
         [HttpPost]
         [ValidateAntiForgeryToken]
-        [Authorize(Policy = "AdminPolicy")]
+        [Authorize(Policy = PolicyConstants.AdminPolicy)]
         public async Task<ActionResult> CompanyInfo(CompanyInfoViewModel model)
         {
-            var selectedSite = await siteManager.GetSiteForEdit(model.SiteId);
+            var selectedSite = await _siteManager.GetSiteForEdit(model.SiteId);
             // only server admin site can edit other sites settings
-            if (selectedSite.Id == siteManager.CurrentSite.Id)
+            if (selectedSite.Id == _siteManager.CurrentSite.Id)
             {
-                ViewData["Title"] = sr["Company Info"];
+                ViewData["Title"] = _sr["Company Info"];
             }
             else 
             {
-                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, sr["{0} - Company Info"], selectedSite.SiteName);
+                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, _sr["{0} - Company Info"], selectedSite.SiteName);
             }
 
             if (selectedSite == null)
             {
-                this.AlertDanger(sr["oops something went wrong."], true);
+                this.AlertDanger(_sr["oops something went wrong."], true);
 
                 return RedirectToAction("Index");
             }
@@ -618,7 +590,7 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
 
             if (model.SiteId == Guid.Empty)
             {
-                this.AlertDanger(sr["oops something went wrong, site was not found."], true);
+                this.AlertDanger(_sr["oops something went wrong, site was not found."], true);
 
                 return RedirectToAction("Index");
             }
@@ -635,13 +607,13 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
             selectedSite.CompanyPublicEmail = model.CompanyPublicEmail;
             selectedSite.CompanyWebsite = model.CompanyWebsite;
 
-            await siteManager.Update(selectedSite);
+            await _siteManager.Update(selectedSite);
             
-            this.AlertSuccess(string.Format(sr["Company Info for {0} was successfully updated."],
+            this.AlertSuccess(string.Format(_sr["Company Info for {0} was successfully updated."],
                         selectedSite.SiteName), true);
             
-            if ((siteManager.CurrentSite.IsServerAdminSite)
-                && (siteManager.CurrentSite.Id != selectedSite.Id)
+            if ((_siteManager.CurrentSite.IsServerAdminSite)
+                && (_siteManager.CurrentSite.Id != selectedSite.Id)
                 )
             {
                 return RedirectToAction("CompanyInfo", new { siteId = model.SiteId });
@@ -651,67 +623,87 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
         }
 
         [HttpGet]
-        [Authorize(Policy = "AdminPolicy")]
+        [Authorize(Policy = PolicyConstants.AdminPolicy)]
         public async Task<IActionResult> MailSettings(
             Guid? siteId,
             int slp = 1)
         {
-            var selectedSite = await siteManager.GetSiteForEdit(siteId);
+            var selectedSite = await _siteManager.GetSiteForEdit(siteId);
             // only server admin site can edit other sites settings
-            if (selectedSite.Id != siteManager.CurrentSite.Id)
+            if (selectedSite.Id != _siteManager.CurrentSite.Id)
             {
-                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, sr["{0} - Email Settings"], selectedSite.SiteName);
+                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, _sr["{0} - Email Settings"], selectedSite.SiteName);
             }
             else
             {
-                ViewData["Title"] = sr["Email Settings"];
+                ViewData["Title"] = _sr["Email Settings"];
             }
 
-            var model = new MailSettingsViewModel();
-            model.SiteId = selectedSite.Id;
-            model.DefaultEmailFromAddress = selectedSite.DefaultEmailFromAddress;
-            model.DefaultEmailFromAlias = selectedSite.DefaultEmailFromAlias;
-            model.SmtpPassword = selectedSite.SmtpPassword;
-            model.SmtpPort = selectedSite.SmtpPort;
-            model.SmtpPreferredEncoding = selectedSite.SmtpPreferredEncoding;
-            model.SmtpRequiresAuth = selectedSite.SmtpRequiresAuth;
-            model.SmtpServer = selectedSite.SmtpServer;
-            model.SmtpUser = selectedSite.SmtpUser;
-            model.SmtpUseSsl = selectedSite.SmtpUseSsl;
-            
+            var model = new MailSettingsViewModel
+            {
+                SiteId = selectedSite.Id,
+                DefaultEmailFromAddress = selectedSite.DefaultEmailFromAddress,
+                DefaultEmailFromAlias = selectedSite.DefaultEmailFromAlias,
+                SmtpPassword = selectedSite.SmtpPassword,
+                SmtpPort = selectedSite.SmtpPort,
+                SmtpPreferredEncoding = selectedSite.SmtpPreferredEncoding,
+                SmtpRequiresAuth = selectedSite.SmtpRequiresAuth,
+                SmtpServer = selectedSite.SmtpServer,
+                SmtpUser = selectedSite.SmtpUser,
+                SmtpUseSsl = selectedSite.SmtpUseSsl
+            };
+            model.AvailableEmailProviders = _emailSenders.Select(x =>
+                              new SelectListItem
+                              {
+                                  Text = x.Name,
+                                  Value = x.Name,
+                                  Selected = model.EmailSenderName == x.Name
+                              }).ToList();
+            model.EmailSenderName = selectedSite.EmailSenderName;
+            model.EmailApiEndpoint = selectedSite.EmailApiEndpoint;
+            model.EmailApiKey = selectedSite.EmailApiKey;
+
             return View(model);
         }
 
         [HttpPost]
         [ValidateAntiForgeryToken]
-        [Authorize(Policy = "AdminPolicy")]
+        [Authorize(Policy = PolicyConstants.AdminPolicy)]
         public async Task<ActionResult> MailSettings(MailSettingsViewModel model)
         {
-            var selectedSite = await siteManager.GetSiteForEdit(model.SiteId);
+            var selectedSite = await _siteManager.GetSiteForEdit(model.SiteId);
             // only server admin site can edit other sites settings
-            if (selectedSite.Id == siteManager.CurrentSite.Id)
+            if (selectedSite.Id == _siteManager.CurrentSite.Id)
             {
-                ViewData["Title"] = sr["Email Settings"];
+                ViewData["Title"] = _sr["Email Settings"];
             }
             else
             {
-                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, sr["{0} - Email Settings"], selectedSite.SiteName);
+                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, _sr["{0} - Email Settings"], selectedSite.SiteName);
             }
 
             if (selectedSite == null)
             {
-                this.AlertDanger(sr["oops something went wrong."], true);
+                this.AlertDanger(_sr["oops something went wrong."], true);
                 return RedirectToAction("Index");
             }
 
             if (!ModelState.IsValid)
             {
+                model.AvailableEmailProviders = _emailSenders.Select(x =>
+                              new SelectListItem
+                              {
+                                  Text = x.Name,
+                                  Value = x.Name,
+                                  Selected = model.EmailSenderName == x.Name
+                              }).ToList();
+
                 return View(model);
             }
 
             if (model.SiteId == Guid.Empty)
             {
-                this.AlertDanger(sr["oops something went wrong, site was not found."], true);
+                this.AlertDanger(_sr["oops something went wrong, site was not found."], true);
                 return RedirectToAction("Index");
             }
 
@@ -724,14 +716,17 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
             selectedSite.SmtpServer = model.SmtpServer;
             selectedSite.SmtpUser = model.SmtpUser;
             selectedSite.SmtpUseSsl = model.SmtpUseSsl;
+            selectedSite.EmailSenderName = model.EmailSenderName;
+            selectedSite.EmailApiKey = model.EmailApiKey;
+            selectedSite.EmailApiEndpoint = model.EmailApiEndpoint;
             
-            await siteManager.Update(selectedSite);
+            await _siteManager.Update(selectedSite);
             
-            this.AlertSuccess(string.Format(sr["Email Settings for {0} were successfully updated."],
+            this.AlertSuccess(string.Format(_sr["Email Settings for {0} were successfully updated."],
                         selectedSite.SiteName), true);
             
-            if ((siteManager.CurrentSite.IsServerAdminSite)
-                && (siteManager.CurrentSite.Id != selectedSite.Id)
+            if ((_siteManager.CurrentSite.IsServerAdminSite)
+                && (_siteManager.CurrentSite.Id != selectedSite.Id)
                 )
             {
                 return RedirectToAction("MailSettings", new { siteId = model.SiteId });
@@ -740,160 +735,157 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
             return RedirectToAction("MailSettings");
         }
 
+        //[HttpGet]
+        //[Authorize(Policy = "AdminPolicy")]
+        //public async Task<IActionResult> SmsSettings(
+        //    Guid? siteId,
+        //    int slp = 1)
+        //{
+
+        //    // this is no longer used, previously sms was for 2fa, but now uses authenticator
+        //    // currently using generic labels but only supports twilio
+
+        //    var selectedSite = await _siteManager.GetSiteForEdit(siteId);
+        //    // only server admin site can edit other sites settings
+        //    if (selectedSite.Id != _siteManager.CurrentSite.Id)
+        //    {
+        //        ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, _sr["{0} - SMS Settings"], selectedSite.SiteName);
+        //    }
+        //    else
+        //    {
+        //        ViewData["Title"] = _sr["SMS Settings"];
+        //    }
+
+        //    var model = new SmsSettingsViewModel();
+        //    model.SiteId = selectedSite.Id;
+        //    model.SmsFrom = selectedSite.SmsFrom;
+        //    model.SmsClientId = selectedSite.SmsClientId;
+        //    model.SmsSecureToken = selectedSite.SmsSecureToken;
+            
+        //    return View(model);
+        //}
+
+        //[HttpPost]
+        //[ValidateAntiForgeryToken]
+        //[Authorize(Policy = "AdminPolicy")]
+        //public async Task<ActionResult> SmsSettings(SmsSettingsViewModel model)
+        //{
+        //    var selectedSite = await _siteManager.GetSiteForEdit(model.SiteId);
+        //    // only server admin site can edit other sites settings
+        //    if (selectedSite.Id == _siteManager.CurrentSite.Id)
+        //    {
+        //        ViewData["Title"] = _sr["SMS Settings"];
+        //    }
+        //    else 
+        //    {
+        //        ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, _sr["{0} - SMS Settings"], selectedSite.SiteName);
+        //    }
+
+        //    if (selectedSite == null)
+        //    {
+        //        this.AlertDanger(_sr["oops something went wrong."], true);
+        //        return RedirectToAction("Index");
+        //    }
+
+        //    if (!ModelState.IsValid)
+        //    {
+        //        return View(model);
+        //    }
+
+        //    if (model.SiteId == Guid.Empty)
+        //    {
+        //        this.AlertDanger(_sr["oops something went wrong, site was not found."], true);
+        //        return RedirectToAction("Index");
+        //    }
+            
+        //    selectedSite.SmsFrom = model.SmsFrom;
+        //    selectedSite.SmsClientId = model.SmsClientId;
+        //    selectedSite.SmsSecureToken = model.SmsSecureToken;
+            
+        //    await _siteManager.Update(selectedSite);
+            
+        //    this.AlertSuccess(string.Format(_sr["SMS Settings for {0} were successfully updated."],
+        //                selectedSite.SiteName), true);
+            
+        //    if ((_siteManager.CurrentSite.IsServerAdminSite)
+        //        && (_siteManager.CurrentSite.Id != selectedSite.Id)
+        //        )
+        //    {
+        //        return RedirectToAction("SmsSettings", new { siteId = model.SiteId });
+        //    }
+
+        //    return RedirectToAction("SmsSettings");
+        //}
+
         [HttpGet]
-        [Authorize(Policy = "AdminPolicy")]
-        public async Task<IActionResult> SmsSettings(
-            Guid? siteId,
-            int slp = 1)
-        {
-
-            //TODO: we need a way to plugin different sms providers by dependency injection
-            // and indicate which one is being used in the UI
-            // currently using generic labels but only supports twilio
-
-            var selectedSite = await siteManager.GetSiteForEdit(siteId);
-            // only server admin site can edit other sites settings
-            if (selectedSite.Id != siteManager.CurrentSite.Id)
-            {
-                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, sr["{0} - SMS Settings"], selectedSite.SiteName);
-            }
-            else
-            {
-                ViewData["Title"] = sr["SMS Settings"];
-            }
-
-            var model = new SmsSettingsViewModel();
-            model.SiteId = selectedSite.Id;
-            model.SmsFrom = selectedSite.SmsFrom;
-            model.SmsClientId = selectedSite.SmsClientId;
-            model.SmsSecureToken = selectedSite.SmsSecureToken;
-            
-            return View(model);
-        }
-
-        [HttpPost]
-        [ValidateAntiForgeryToken]
-        [Authorize(Policy = "AdminPolicy")]
-        public async Task<ActionResult> SmsSettings(SmsSettingsViewModel model)
-        {
-            var selectedSite = await siteManager.GetSiteForEdit(model.SiteId);
-            // only server admin site can edit other sites settings
-            if (selectedSite.Id == siteManager.CurrentSite.Id)
-            {
-                ViewData["Title"] = sr["SMS Settings"];
-            }
-            else 
-            {
-                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, sr["{0} - SMS Settings"], selectedSite.SiteName);
-            }
-
-            if (selectedSite == null)
-            {
-                this.AlertDanger(sr["oops something went wrong."], true);
-                return RedirectToAction("Index");
-            }
-
-            if (!ModelState.IsValid)
-            {
-                return View(model);
-            }
-
-            if (model.SiteId == Guid.Empty)
-            {
-                this.AlertDanger(sr["oops something went wrong, site was not found."], true);
-                return RedirectToAction("Index");
-            }
-            
-            selectedSite.SmsFrom = model.SmsFrom;
-            selectedSite.SmsClientId = model.SmsClientId;
-            selectedSite.SmsSecureToken = model.SmsSecureToken;
-            
-            await siteManager.Update(selectedSite);
-            
-            this.AlertSuccess(string.Format(sr["SMS Settings for {0} were successfully updated."],
-                        selectedSite.SiteName), true);
-            
-            if ((siteManager.CurrentSite.IsServerAdminSite)
-                && (siteManager.CurrentSite.Id != selectedSite.Id)
-                )
-            {
-                return RedirectToAction("SmsSettings", new { siteId = model.SiteId });
-            }
-
-            return RedirectToAction("SmsSettings");
-        }
-
-        [HttpGet]
-        [Authorize(Policy = "AdminPolicy")]
+        [Authorize(Policy = PolicyConstants.AdminPolicy)]
         public async Task<IActionResult> SecuritySettings(
             Guid? siteId,
             int slp = 1)
         {
-            var selectedSite = await siteManager.GetSiteForEdit(siteId);
+            var selectedSite = await _siteManager.GetSiteForEdit(siteId);
             // only server admin site can edit other sites settings
-            if (selectedSite.Id != siteManager.CurrentSite.Id)
+            if (selectedSite.Id != _siteManager.CurrentSite.Id)
             {
-                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, sr["{0} - Security Settings"], selectedSite.SiteName);
+                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, _sr["{0} - Security Settings"], selectedSite.SiteName);
             }
             else
             {
-                ViewData["Title"] = sr["Security Settings"];
+                ViewData["Title"] = _sr["Security Settings"];
             }
 
-            var smtpOptions = await smtpOptionsProvider.GetSmtpOptions().ConfigureAwait(false);
 
-            var model = new SecuritySettingsViewModel();
-            model.SiteId = selectedSite.Id;
-            model.AllowNewRegistration = selectedSite.AllowNewRegistration;
-            model.AllowPersistentLogin = selectedSite.AllowPersistentLogin;
-            model.DisableDbAuth = selectedSite.DisableDbAuth;
-            model.ReallyDeleteUsers = selectedSite.ReallyDeleteUsers;
-            model.RequireApprovalBeforeLogin = selectedSite.RequireApprovalBeforeLogin;
-            model.RequireConfirmedEmail = selectedSite.RequireConfirmedEmail;
-            model.UseEmailForLogin = selectedSite.UseEmailForLogin;
-            model.RequireConfirmedPhone = selectedSite.RequireConfirmedPhone;
-            model.AccountApprovalEmailCsv = selectedSite.AccountApprovalEmailCsv;
-
-            model.SmtpIsConfigured = !string.IsNullOrEmpty(smtpOptions.Server);
-            model.SmsIsConfigured = selectedSite.SmsIsConfigured();
-            model.HasAnySocialAuthEnabled = selectedSite.HasAnySocialAuthEnabled();
+            var model = new SecuritySettingsViewModel
+            {
+                SiteId = selectedSite.Id,
+                AllowNewRegistration = selectedSite.AllowNewRegistration,
+                AllowPersistentLogin = selectedSite.AllowPersistentLogin,
+                DisableDbAuth = selectedSite.DisableDbAuth,
+                ReallyDeleteUsers = selectedSite.ReallyDeleteUsers,
+                RequireApprovalBeforeLogin = selectedSite.RequireApprovalBeforeLogin,
+                RequireConfirmedEmail = selectedSite.RequireConfirmedEmail,
+                UseEmailForLogin = selectedSite.UseEmailForLogin,
+                RequireConfirmedPhone = selectedSite.RequireConfirmedPhone,
+                AccountApprovalEmailCsv = selectedSite.AccountApprovalEmailCsv,
+                EmailIsConfigured = await _siteCapabilities.SupportsEmailNotification(new SiteContext(selectedSite)),
+                SmsIsConfigured = selectedSite.SmsIsConfigured(),
+                HasAnySocialAuthEnabled = selectedSite.HasAnySocialAuthEnabled()
+            };
 
             return View(model);
         }
 
         [HttpPost]
         [ValidateAntiForgeryToken]
-        [Authorize(Policy = "AdminPolicy")]
+        [Authorize(Policy = PolicyConstants.AdminPolicy)]
         public async Task<ActionResult> SecuritySettings(SecuritySettingsViewModel model)
         {
-            var selectedSite = await siteManager.GetSiteForEdit(model.SiteId);
+            var selectedSite = await _siteManager.GetSiteForEdit(model.SiteId);
             // only server admin site can edit other sites settings
-            if (selectedSite.Id == siteManager.CurrentSite.Id)
+            if (selectedSite.Id == _siteManager.CurrentSite.Id)
             {
                 ViewData["Title"] = "Security Settings";
             }
-            else if (siteManager.CurrentSite.IsServerAdminSite)
+            else if (_siteManager.CurrentSite.IsServerAdminSite)
             {
                 ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, "{0} - Security Settings", selectedSite.SiteName);
             }
 
             if (selectedSite == null)
             {
-                this.AlertDanger(sr["oops something went wrong."], true);
+                this.AlertDanger(_sr["oops something went wrong."], true);
                 return RedirectToAction("Index");
             }
 
             if (model.SiteId == Guid.Empty)
             {
-                this.AlertDanger(sr["oops something went wrong, site was not found."], true);
+                this.AlertDanger(_sr["oops something went wrong, site was not found."], true);
                 return RedirectToAction("Index");
             }
-
-            var smtpOptions = await smtpOptionsProvider.GetSmtpOptions().ConfigureAwait(false);
-
+            
             if (!ModelState.IsValid)
             {
-                model.SmtpIsConfigured = !string.IsNullOrEmpty(smtpOptions.Server);
+                model.EmailIsConfigured = await _siteCapabilities.SupportsEmailNotification(new SiteContext(selectedSite));
                 model.SmsIsConfigured = selectedSite.SmsIsConfigured();
                 model.HasAnySocialAuthEnabled = selectedSite.HasAnySocialAuthEnabled();
                 return View(model);
@@ -909,13 +901,13 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
             selectedSite.RequireConfirmedPhone = model.RequireConfirmedPhone;
             selectedSite.UseEmailForLogin = model.UseEmailForLogin;
             
-            await siteManager.Update(selectedSite);
+            await _siteManager.Update(selectedSite);
             
-            this.AlertSuccess(string.Format(sr["Security Settings for {0} was successfully updated."],
+            this.AlertSuccess(string.Format(_sr["Security Settings for {0} was successfully updated."],
                         selectedSite.SiteName), true);
             
-            if ((siteManager.CurrentSite.IsServerAdminSite)
-                && (siteManager.CurrentSite.Id != selectedSite.Id)
+            if ((_siteManager.CurrentSite.IsServerAdminSite)
+                && (_siteManager.CurrentSite.Id != selectedSite.Id)
                 )
             {
                 return RedirectToAction("SecuritySettings", new { siteId = model.SiteId });
@@ -925,29 +917,31 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
         }
 
         [HttpGet]
-        [Authorize(Policy = "AdminPolicy")]
+        [Authorize(Policy = PolicyConstants.AdminPolicy)]
         public async Task<IActionResult> Captcha(
             Guid? siteId,
             int slp = 1)
         {
-            var selectedSite = await siteManager.GetSiteForEdit(siteId);
+            var selectedSite = await _siteManager.GetSiteForEdit(siteId);
             // only server admin site can edit other sites settings
-            if (selectedSite.Id != siteManager.CurrentSite.Id)
+            if (selectedSite.Id != _siteManager.CurrentSite.Id)
             {
-                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, sr["{0} - Captcha Settings"], selectedSite.SiteName);
+                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, _sr["{0} - Captcha Settings"], selectedSite.SiteName);
             }
             else
             {
-                ViewData["Title"] = sr["Captcha Settings"];
+                ViewData["Title"] = _sr["Captcha Settings"];
             }
-            
-            var model = new CaptchaSettingsViewModel();
-            model.SiteId = selectedSite.Id;
-            model.RecaptchaPrivateKey = selectedSite.RecaptchaPrivateKey;
-            model.RecaptchaPublicKey = selectedSite.RecaptchaPublicKey;
-            model.UseInvisibleCaptcha = selectedSite.UseInvisibleRecaptcha;
-            model.RequireCaptchaOnLogin = selectedSite.CaptchaOnLogin;
-            model.RequireCaptchaOnRegistration = selectedSite.CaptchaOnRegistration;
+
+            var model = new CaptchaSettingsViewModel
+            {
+                SiteId = selectedSite.Id,
+                RecaptchaPrivateKey = selectedSite.RecaptchaPrivateKey,
+                RecaptchaPublicKey = selectedSite.RecaptchaPublicKey,
+                UseInvisibleCaptcha = selectedSite.UseInvisibleRecaptcha,
+                RequireCaptchaOnLogin = selectedSite.CaptchaOnLogin,
+                RequireCaptchaOnRegistration = selectedSite.CaptchaOnRegistration
+            };
 
             return View("CaptchaSettings", model);
         }
@@ -955,23 +949,23 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
         // Post: /SiteAdmin/Captcha
         [HttpPost]
         [ValidateAntiForgeryToken]
-        [Authorize(Policy = "AdminPolicy")]
+        [Authorize(Policy = PolicyConstants.AdminPolicy)]
         public async Task<ActionResult> Captcha(CaptchaSettingsViewModel model)
         {
-            var selectedSite = await siteManager.GetSiteForEdit(model.SiteId);
+            var selectedSite = await _siteManager.GetSiteForEdit(model.SiteId);
             // only server admin site can edit other sites settings
-            if (selectedSite.Id == siteManager.CurrentSite.Id)
+            if (selectedSite.Id == _siteManager.CurrentSite.Id)
             {
-                ViewData["Title"] = sr["Captcha Settings"];
+                ViewData["Title"] = _sr["Captcha Settings"];
             }
             else 
             {
-                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, sr["{0} - Captcha Settings"], selectedSite.SiteName);
+                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, _sr["{0} - Captcha Settings"], selectedSite.SiteName);
             }
 
             if (selectedSite == null)
             {
-                this.AlertDanger(sr["oops something went wrong."], true);
+                this.AlertDanger(_sr["oops something went wrong."], true);
                 return RedirectToAction("Index");
             }
 
@@ -982,7 +976,7 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
 
             if (model.SiteId == Guid.Empty)
             {
-                this.AlertDanger(sr["oops something went wrong, site was not found."], true);
+                this.AlertDanger(_sr["oops something went wrong, site was not found."], true);
                 return RedirectToAction("Index");
             }
 
@@ -992,13 +986,13 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
             selectedSite.CaptchaOnRegistration = model.RequireCaptchaOnRegistration;
             selectedSite.CaptchaOnLogin = model.RequireCaptchaOnLogin;
 
-            await siteManager.Update(selectedSite);
+            await _siteManager.Update(selectedSite);
             
-            this.AlertSuccess(string.Format(sr["Captcha Settings for {0} was successfully updated."],
+            this.AlertSuccess(string.Format(_sr["Captcha Settings for {0} was successfully updated."],
                         selectedSite.SiteName), true);
             
-            if ((siteManager.CurrentSite.IsServerAdminSite)
-                &&(siteManager.CurrentSite.Id != selectedSite.Id)
+            if ((_siteManager.CurrentSite.IsServerAdminSite)
+                &&(_siteManager.CurrentSite.Id != selectedSite.Id)
                 )
             {
                 return RedirectToAction("Captcha", new { siteId = model.SiteId });
@@ -1009,36 +1003,38 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
 
         // GET: /SiteAdmin/SocialLogins
         [HttpGet]
-        [Authorize(Policy = "AdminPolicy")]
+        [Authorize(Policy = PolicyConstants.AdminPolicy)]
         public async Task<IActionResult> SocialLogins(
             Guid? siteId,
             int slp = 1)
         {
-            var selectedSite = await siteManager.GetSiteForEdit(siteId);
+            var selectedSite = await _siteManager.GetSiteForEdit(siteId);
             // only server admin site can edit other sites settings
-            if (selectedSite.Id != siteManager.CurrentSite.Id)
+            if (selectedSite.Id != _siteManager.CurrentSite.Id)
             {
-                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, sr["{0} - Social Login Settings"], selectedSite.SiteName);
+                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, _sr["{0} - Social Login Settings"], selectedSite.SiteName);
             }
             else
             {
-                ViewData["Title"] = sr["Social Login Settings"];
+                ViewData["Title"] = _sr["Social Login Settings"];
             }
-            
-            var model = new SocialLoginSettingsViewModel();
-            model.SiteId = selectedSite.Id;
-            model.FacebookAppId = selectedSite.FacebookAppId;
-            model.FacebookAppSecret = selectedSite.FacebookAppSecret;
-            model.GoogleClientId = selectedSite.GoogleClientId;
-            model.GoogleClientSecret = selectedSite.GoogleClientSecret;
-            model.MicrosoftClientId = selectedSite.MicrosoftClientId;
-            model.MicrosoftClientSecret = selectedSite.MicrosoftClientSecret;
-            model.TwitterConsumerKey = selectedSite.TwitterConsumerKey;
-            model.TwitterConsumerSecret = selectedSite.TwitterConsumerSecret;
-            model.OidConnectDisplayName = selectedSite.OidConnectDisplayName;
-            model.OidConnectAppId = selectedSite.OidConnectAppId;
-            model.OidConnectAppSecret = selectedSite.OidConnectAppSecret;
-            model.OidConnectAuthority = selectedSite.OidConnectAuthority;
+
+            var model = new SocialLoginSettingsViewModel
+            {
+                SiteId = selectedSite.Id,
+                FacebookAppId = selectedSite.FacebookAppId,
+                FacebookAppSecret = selectedSite.FacebookAppSecret,
+                GoogleClientId = selectedSite.GoogleClientId,
+                GoogleClientSecret = selectedSite.GoogleClientSecret,
+                MicrosoftClientId = selectedSite.MicrosoftClientId,
+                MicrosoftClientSecret = selectedSite.MicrosoftClientSecret,
+                TwitterConsumerKey = selectedSite.TwitterConsumerKey,
+                TwitterConsumerSecret = selectedSite.TwitterConsumerSecret,
+                OidConnectDisplayName = selectedSite.OidConnectDisplayName,
+                OidConnectAppId = selectedSite.OidConnectAppId,
+                OidConnectAppSecret = selectedSite.OidConnectAppSecret,
+                OidConnectAuthority = selectedSite.OidConnectAuthority
+            };
 
             return View(model);
 
@@ -1047,23 +1043,23 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
         // Post: /SiteAdmin/SocialLogins
         [HttpPost]
         [ValidateAntiForgeryToken]
-        [Authorize(Policy = "AdminPolicy")]
+        [Authorize(Policy = PolicyConstants.AdminPolicy)]
         public async Task<ActionResult> SocialLogins(SocialLoginSettingsViewModel model)
         {
-            var selectedSite = await siteManager.GetSiteForEdit(model.SiteId);
+            var selectedSite = await _siteManager.GetSiteForEdit(model.SiteId);
             // only server admin site can edit other sites settings
-            if (selectedSite.Id == siteManager.CurrentSite.Id)
+            if (selectedSite.Id == _siteManager.CurrentSite.Id)
             {
-                ViewData["Title"] = sr["Social Login Settings"];
+                ViewData["Title"] = _sr["Social Login Settings"];
             }
-            else if (siteManager.CurrentSite.IsServerAdminSite)
+            else if (_siteManager.CurrentSite.IsServerAdminSite)
             {
-                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, sr["{0} - Social Login Settings"], selectedSite.SiteName);
+                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, _sr["{0} - Social Login Settings"], selectedSite.SiteName);
             }
 
             if (selectedSite == null)
             {
-                this.AlertDanger(sr["oops something went wrong."], true);
+                this.AlertDanger(_sr["oops something went wrong."], true);
                 return RedirectToAction("Index");
             }
 
@@ -1074,7 +1070,7 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
 
             if (model.SiteId == Guid.Empty)
             {
-                this.AlertDanger(sr["oops something went wrong, site was not found."], true);
+                this.AlertDanger(_sr["oops something went wrong, site was not found."], true);
                 return RedirectToAction("Index");
             }
             
@@ -1091,16 +1087,16 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
             selectedSite.OidConnectAppSecret = model.OidConnectAppSecret;
             selectedSite.OidConnectAuthority = model.OidConnectAuthority;
 
-            await siteManager.Update(selectedSite);
+            await _siteManager.Update(selectedSite);
             //TODO: need to wrap ICache into something more abstract and/or move it into sitemanager
             // also need to clear using the folder name if it isn't root site or hostname if using tenants per host
            // cache.Remove("root");
             
-            this.AlertSuccess(string.Format(sr["Social Login Settings for {0} was successfully updated."],
+            this.AlertSuccess(string.Format(_sr["Social Login Settings for {0} was successfully updated."],
                         selectedSite.SiteName), true);
             
-            if ((siteManager.CurrentSite.IsServerAdminSite)
-                && (siteManager.CurrentSite.Id != selectedSite.Id)
+            if ((_siteManager.CurrentSite.IsServerAdminSite)
+                && (_siteManager.CurrentSite.Id != selectedSite.Id)
                 )
             {
                 return RedirectToAction("SocialLogins", new { siteId = model.SiteId });
@@ -1111,50 +1107,52 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
 
         // GET: /SiteAdmin/LoginPageInfo
         [HttpGet]
-        [Authorize(Policy = "AdminPolicy")]
+        [Authorize(Policy = PolicyConstants.AdminPolicy)]
         public async Task<IActionResult> LoginPageInfo(
             Guid? siteId,
             int slp = 1)
         {
-            var selectedSite = await siteManager.GetSiteForEdit(siteId);
+            var selectedSite = await _siteManager.GetSiteForEdit(siteId);
             // only server admin site can edit other sites settings
-            if (selectedSite.Id != siteManager.CurrentSite.Id)
+            if (selectedSite.Id != _siteManager.CurrentSite.Id)
             {
-                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, sr["{0} - Login Page Content"], selectedSite.SiteName);
+                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, _sr["{0} - Login Page Content"], selectedSite.SiteName);
             }
             else
             {
-                ViewData["Title"] = sr["Login Page Content"];
+                ViewData["Title"] = _sr["Login Page Content"];
             }
-            
-            var model = new LoginInfoViewModel();
-            model.SiteId = selectedSite.Id;
-            model.LoginInfoTop = selectedSite.LoginInfoTop;
-            model.LoginInfoBottom = selectedSite.LoginInfoBottom;
-            
+
+            var model = new LoginInfoViewModel
+            {
+                SiteId = selectedSite.Id,
+                LoginInfoTop = selectedSite.LoginInfoTop,
+                LoginInfoBottom = selectedSite.LoginInfoBottom
+            };
+
             return View(model);
         }
 
         // Post: /SiteAdmin/LoginPageInfo
         [HttpPost]
         [ValidateAntiForgeryToken]
-        [Authorize(Policy = "AdminPolicy")]
+        [Authorize(Policy = PolicyConstants.AdminPolicy)]
         public async Task<ActionResult> LoginPageInfo(LoginInfoViewModel model)
         {
-            var selectedSite = await siteManager.GetSiteForEdit(model.SiteId);
+            var selectedSite = await _siteManager.GetSiteForEdit(model.SiteId);
             // only server admin site can edit other sites settings
-            if (selectedSite.Id == siteManager.CurrentSite.Id)
+            if (selectedSite.Id == _siteManager.CurrentSite.Id)
             {
-                ViewData["Title"] = sr["Login Page Content"];
+                ViewData["Title"] = _sr["Login Page Content"];
             }
-            else if (siteManager.CurrentSite.IsServerAdminSite)
+            else if (_siteManager.CurrentSite.IsServerAdminSite)
             {
-                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, sr["{0} - Login Page Content"], selectedSite.SiteName);
+                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, _sr["{0} - Login Page Content"], selectedSite.SiteName);
             }
 
             if (selectedSite == null)
             {
-                this.AlertDanger(sr["oops something went wrong."], true);
+                this.AlertDanger(_sr["oops something went wrong."], true);
                 return RedirectToAction("Index");
             }
 
@@ -1165,20 +1163,20 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
 
             if (model.SiteId == Guid.Empty)
             {
-                this.AlertDanger(sr["oops something went wrong, site was not found."], true);
+                this.AlertDanger(_sr["oops something went wrong, site was not found."], true);
                 return RedirectToAction("Index");
             }
             
             selectedSite.LoginInfoTop = model.LoginInfoTop;
             selectedSite.LoginInfoBottom = model.LoginInfoBottom;
             
-            await siteManager.Update(selectedSite);
+            await _siteManager.Update(selectedSite);
             
-            this.AlertSuccess(string.Format(sr["Login Page Info for {0} was successfully updated."],
+            this.AlertSuccess(string.Format(_sr["Login Page Info for {0} was successfully updated."],
                         selectedSite.SiteName), true);
             
-            if ((siteManager.CurrentSite.IsServerAdminSite)
-                && (siteManager.CurrentSite.Id != selectedSite.Id)
+            if ((_siteManager.CurrentSite.IsServerAdminSite)
+                && (_siteManager.CurrentSite.Id != selectedSite.Id)
                 )
             {
                 return RedirectToAction("LoginPageInfo", new { siteId = model.SiteId });
@@ -1189,27 +1187,29 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
 
         // GET: /SiteAdmin/RegisterPageInfo
         [HttpGet]
-        [Authorize(Policy = "AdminPolicy")]
+        [Authorize(Policy = PolicyConstants.AdminPolicy)]
         public async Task<IActionResult> RegisterPageInfo(
             Guid? siteId,
             int slp = 1)
         {
-            var selectedSite = await siteManager.GetSiteForEdit(siteId);
+            var selectedSite = await _siteManager.GetSiteForEdit(siteId);
             // only server admin site can edit other sites settings
-            if (selectedSite.Id != siteManager.CurrentSite.Id)
+            if (selectedSite.Id != _siteManager.CurrentSite.Id)
             {
-                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, sr["{0} - Registration Page Content"], selectedSite.SiteName);
+                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, _sr["{0} - Registration Page Content"], selectedSite.SiteName);
             }
             else
             {
-                ViewData["Title"] = sr["Registration Page Content"];
+                ViewData["Title"] = _sr["Registration Page Content"];
             }
-            
-            var model = new RegisterInfoViewModel();
-            model.SiteId = selectedSite.Id;
-            model.RegistrationPreamble = selectedSite.RegistrationPreamble;
-            model.RegistrationAgreement = selectedSite.RegistrationAgreement;
-            
+
+            var model = new RegisterInfoViewModel
+            {
+                SiteId = selectedSite.Id,
+                RegistrationPreamble = selectedSite.RegistrationPreamble,
+                RegistrationAgreement = selectedSite.RegistrationAgreement
+            };
+
             return View(model);
         }
 
@@ -1217,23 +1217,23 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
         // Post: /SiteAdmin/RegisterPageInfo
         [HttpPost]
         [ValidateAntiForgeryToken]
-        [Authorize(Policy = "AdminPolicy")]
+        [Authorize(Policy = PolicyConstants.AdminPolicy)]
         public async Task<ActionResult> RegisterPageInfo(RegisterInfoViewModel model)
         {
-            var selectedSite = await siteManager.GetSiteForEdit(model.SiteId);
+            var selectedSite = await _siteManager.GetSiteForEdit(model.SiteId);
             // only server admin site can edit other sites settings
-            if (selectedSite.Id == siteManager.CurrentSite.Id)
+            if (selectedSite.Id == _siteManager.CurrentSite.Id)
             {
-                ViewData["Title"] = sr["Registration Page Content"];
+                ViewData["Title"] = _sr["Registration Page Content"];
             }
-            else if (siteManager.CurrentSite.IsServerAdminSite)
+            else if (_siteManager.CurrentSite.IsServerAdminSite)
             {
-                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, sr["{0} - Registration Page Content"], selectedSite.SiteName);
+                ViewData["Title"] = string.Format(CultureInfo.CurrentUICulture, _sr["{0} - Registration Page Content"], selectedSite.SiteName);
             }
 
             if (selectedSite == null)
             {
-                this.AlertDanger(sr["oops something went wrong."], true);
+                this.AlertDanger(_sr["oops something went wrong."], true);
                 return RedirectToAction("Index");
             }
 
@@ -1244,7 +1244,7 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
 
             if (model.SiteId == Guid.Empty)
             {
-                this.AlertDanger(sr["oops something went wrong, site was not found."], true);
+                this.AlertDanger(_sr["oops something went wrong, site was not found."], true);
                 return RedirectToAction("Index");
             }
 
@@ -1261,13 +1261,13 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
             selectedSite.RegistrationPreamble = model.RegistrationPreamble;
             selectedSite.RegistrationAgreement = model.RegistrationAgreement;
             
-            await siteManager.Update(selectedSite);
+            await _siteManager.Update(selectedSite);
             
-            this.AlertSuccess(string.Format(sr["Registration Page Content for {0} was successfully updated."],
+            this.AlertSuccess(string.Format(_sr["Registration Page Content for {0} was successfully updated."],
                         selectedSite.SiteName), true);
             
-            if ((siteManager.CurrentSite.IsServerAdminSite)
-                && (siteManager.CurrentSite.Id != selectedSite.Id)
+            if ((_siteManager.CurrentSite.IsServerAdminSite)
+                && (_siteManager.CurrentSite.Id != selectedSite.Id)
                 )
             {
                 return RedirectToAction("RegisterPageInfo", new { siteId = model.SiteId });
@@ -1281,10 +1281,10 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
 
         [HttpPost]
         [ValidateAntiForgeryToken]
-        [Authorize(Policy = "ServerAdminPolicy")]
+        [Authorize(Policy = PolicyConstants.ServerAdminPolicy)]
         public async Task<ActionResult> SiteDelete(Guid siteId, int returnPageNumber = 1)
         {
-            var selectedSite = await siteManager.Fetch(siteId);
+            var selectedSite = await _siteManager.Fetch(siteId);
 
             if (selectedSite != null)
             {
@@ -1292,17 +1292,17 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
                 if (selectedSite.IsServerAdminSite)
                 {
                     this.AlertWarning(string.Format(
-                            sr["The site {0} was not deleted because it is a server admin site."],
+                            _sr["The site {0} was not deleted because it is a server admin site."],
                             selectedSite.SiteName)
                             , true);
 
                     return RedirectToAction("SiteList", new { pageNumber = returnPageNumber });
                 }
 
-                await siteManager.Delete(selectedSite);
+                await _siteManager.Delete(selectedSite);
 
                 this.AlertWarning(string.Format(
-                            sr["The site {0} was successfully deleted."],
+                            _sr["The site {0} was successfully deleted."],
                             selectedSite.SiteName)
                             , true);
             }
@@ -1311,27 +1311,29 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
         }
 
         [HttpGet]
-        [Authorize(Policy = "ServerAdminPolicy")]
+        [Authorize(Policy = PolicyConstants.ServerAdminPolicy)]
         public async Task<ActionResult> SiteHostMappings(
             Guid? siteId,
             int slp = -1)
         {
-            var selectedSite = await siteManager.GetSiteForEdit(siteId);
+            var selectedSite = await _siteManager.GetSiteForEdit(siteId);
             // only server admin site can edit other sites settings
-            if (selectedSite.Id != siteManager.CurrentSite.Id)
+            if (selectedSite.Id != _siteManager.CurrentSite.Id)
             {
                 ViewData["Title"] = string.Format(CultureInfo.InvariantCulture,
-                sr["Domain/Host Name Mappings for {0}"],
+                _sr["Domain/Host Name Mappings for {0}"],
                 selectedSite.SiteName);
             }
             else
             {
-                ViewData["Title"] = sr["Domain/Host Name Mappings"];
+                ViewData["Title"] = _sr["Domain/Host Name Mappings"];
             }
 
-            var model = new SiteHostMappingsViewModel();
-            model.SiteId = selectedSite.Id;
-            model.HostMappings = await siteManager.GetSiteHosts(selectedSite.Id);
+            var model = new SiteHostMappingsViewModel
+            {
+                SiteId = selectedSite.Id,
+                HostMappings = await _siteManager.GetSiteHosts(selectedSite.Id)
+            };
             if (slp > -1)
             {
                 model.SiteListReturnPageNumber = slp;
@@ -1342,20 +1344,20 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
 
         [HttpPost]
         [ValidateAntiForgeryToken]
-        [Authorize(Policy = "ServerAdminPolicy")]
+        [Authorize(Policy = PolicyConstants.ServerAdminPolicy)]
         public async Task<ActionResult> HostAdd(
             Guid siteId,
             string hostName,
             int slp = -1)
         {
-            var selectedSite = await siteManager.Fetch(siteId);
+            var selectedSite = await _siteManager.Fetch(siteId);
 
             if (selectedSite == null)
             {
                 return RedirectToAction("Index");
             }
 
-            if(selectedSite.Id != siteManager.CurrentSite.Id && !siteManager.CurrentSite.IsServerAdminSite)
+            if(selectedSite.Id != _siteManager.CurrentSite.Id && !_siteManager.CurrentSite.IsServerAdminSite)
             {
                 return RedirectToAction("Index");
             }
@@ -1364,50 +1366,50 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
             if (!string.IsNullOrEmpty(hostName))
             {
                 hostName = hostName.Replace("https://", string.Empty).Replace("http://", string.Empty);
-                host = await siteManager.GetSiteHost(hostName);
+                host = await _siteManager.GetSiteHost(hostName);
 
                 if (host != null)
                 {
                     if (host.SiteId != selectedSite.Id)
                     {
                         this.AlertWarning(
-                        sr["failed to add the requested host name mapping becuase it is already mapped to another site."],
+                        _sr["failed to add the requested host name mapping becuase it is already mapped to another site."],
                         true);
                     }
                 }
                 else
                 {
-                    await siteManager.AddHost(selectedSite.Id, hostName);
+                    await _siteManager.AddHost(selectedSite.Id, hostName);
                     
-                    this.AlertSuccess(string.Format(sr["Host/domain mapping for {0} was successfully created."],
+                    this.AlertSuccess(string.Format(_sr["Host/domain mapping for {0} was successfully created."],
                                 selectedSite.SiteName), true);
                 }
             }
 
-            return RedirectToAction("SiteHostMappings", new { siteId = siteId, slp = slp });
+            return RedirectToAction("SiteHostMappings", new { siteId, slp });
         }
 
         [HttpPost]
         [ValidateAntiForgeryToken]
-        [Authorize(Policy = "ServerAdminPolicy")]
+        [Authorize(Policy = PolicyConstants.ServerAdminPolicy)]
         public async Task<ActionResult> HostDelete(
             Guid siteId,
             string hostName,
             int slp = -1)
         {
-            var selectedSite = await siteManager.Fetch(siteId);
+            var selectedSite = await _siteManager.Fetch(siteId);
 
             if (selectedSite == null)
             {
                 return RedirectToAction("Index");
             }
 
-            if (selectedSite.Id != siteManager.CurrentSite.Id && !siteManager.CurrentSite.IsServerAdminSite)
+            if (selectedSite.Id != _siteManager.CurrentSite.Id && !_siteManager.CurrentSite.IsServerAdminSite)
             {
                 return RedirectToAction("Index");
             }
 
-            var host = await siteManager.GetSiteHost(hostName);
+            var host = await _siteManager.GetSiteHost(hostName);
             
             if (host != null)
             {
@@ -1416,17 +1418,17 @@ namespace cloudscribe.Core.Web.Controllers.Mvc
                     if (selectedSite.PreferredHostName == host.HostName)
                     {
                         selectedSite.PreferredHostName = string.Empty;
-                        await siteManager.Update(selectedSite);
+                        await _siteManager.Update(selectedSite);
                     }
 
-                    await siteManager.DeleteHost(host.SiteId, host.Id);
+                    await _siteManager.DeleteHost(host.SiteId, host.Id);
                     
-                    this.AlertSuccess(string.Format(sr["Host/domain mapping for {0} was successfully removed."],
+                    this.AlertSuccess(string.Format(_sr["Host/domain mapping for {0} was successfully removed."],
                                 selectedSite.SiteName), true);
                 }
             }
 
-            return RedirectToAction("SiteHostMappings", new { siteId = siteId, slp = slp });
+            return RedirectToAction("SiteHostMappings", new { siteId, slp });
         }
   
     }

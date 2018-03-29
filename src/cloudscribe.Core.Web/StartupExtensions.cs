@@ -2,23 +2,28 @@
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 // Author:					Joe Audette
 // Created:					2016-05-07
-// Last Modified:			2017-09-23
+// Last Modified:			2018-03-07
 // 
 
 
 using cloudscribe.Core.Models;
-using cloudscribe.Web.Common.Setup;
-using cloudscribe.Core.Web;
+using cloudscribe.Core.Models.Identity;
 using cloudscribe.Core.Web.Analytics;
 using cloudscribe.Core.Web.Components;
 using cloudscribe.Core.Web.Components.Messaging;
 using cloudscribe.Core.Web.ExtensionPoints;
+using cloudscribe.Core.Web.Mvc.Components;
 using cloudscribe.Core.Web.Navigation;
-using cloudscribe.Messaging.Email;
+using cloudscribe.Email;
+using cloudscribe.Email.ElasticEmail;
+using cloudscribe.Email.Mailgun;
+using cloudscribe.Email.SendGrid;
+using cloudscribe.Email.Smtp;
 using cloudscribe.Web.Common;
 using cloudscribe.Web.Common.Components;
 using cloudscribe.Web.Common.Models;
 using cloudscribe.Web.Common.Razor;
+using cloudscribe.Web.Common.Setup;
 using cloudscribe.Web.Navigation;
 using cloudscribe.Web.Navigation.Caching;
 using Microsoft.AspNetCore.Authorization;
@@ -29,9 +34,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using System;
-using cloudscribe.Core.Models.Identity;
-using cloudscribe.Core.Web.Mvc;
-using cloudscribe.Core.Web.Mvc.Components;
 
 namespace Microsoft.Extensions.DependencyInjection
 {
@@ -40,7 +42,7 @@ namespace Microsoft.Extensions.DependencyInjection
         public static IServiceCollection AddCloudscribeCoreMvc(this IServiceCollection services, IConfiguration configuration)
         {
             services.AddCloudscribeCoreCommon(configuration);
-            services.AddScoped<IVersionProvider, ControllerVersionInfo>();
+            //services.AddScoped<IVersionProvider, ControllerVersionInfo>();
 
             services.TryAddScoped<IDecideErrorResponseType, DefaultErrorResponseTypeDecider>();
 
@@ -55,18 +57,20 @@ namespace Microsoft.Extensions.DependencyInjection
         {
             services.TryAddSingleton<IHttpContextAccessor, HttpContextAccessor>();
 
-            services.TryAddScoped<ISmtpOptionsProvider, SiteSmtpOptionsResolver>();
+            
             services.Configure<MultiTenantOptions>(configuration.GetSection("MultiTenantOptions"));
-            services.Configure<SmtpOptions>(configuration.GetSection("SmtpOptions"));
+            services.Configure<NewUserOptions>(configuration.GetSection("NewUserOptions"));
+
             services.Configure<RecaptchaKeys>(configuration.GetSection("RecaptchaKeys"));
             services.Configure<SiteConfigOptions>(configuration.GetSection("SiteConfigOptions"));
             services.Configure<UIOptions>(configuration.GetSection("UIOptions"));
             
             services.Configure<CachingSiteResolverOptions>(configuration.GetSection("CachingSiteResolverOptions"));
-            
-           
+
+
             //services.AddMultitenancy<SiteSettings, SiteResolver>();
-            
+            services.TryAddScoped<ISiteContextResolver, SiteContextResolver>();
+
             services.AddMultitenancy<SiteContext, CachingSiteResolver>();
             services.AddScoped<CacheHelper, CacheHelper>();
 
@@ -88,14 +92,9 @@ namespace Microsoft.Extensions.DependencyInjection
             services.TryAddScoped<IHandleCustomUserInfoAdmin, NoUserEditCustomization>();
 
             services.TryAddScoped<IHandleAccountAnalytics, GoogleAccountAnalytics>();
-
-            //
-
-            //
-
+            
             services.AddCloudscribeCommmon(configuration);
             
-
             services.AddCloudscribePagination();
 
             services.AddScoped<IVersionProviderFactory, VersionProviderFactory>();
@@ -103,12 +102,16 @@ namespace Microsoft.Extensions.DependencyInjection
             services.AddScoped<IVersionProvider, DataStorageVersionInfo>();
             services.AddScoped<IVersionProvider, IdentityVersionInfo>();
 
-
+            services.Configure<SmtpOptions>(configuration.GetSection("SmtpOptions"));
+            services.TryAddScoped<ISmtpOptionsProvider, SiteSmtpOptionsResolver>();
+            services.TryAddScoped<IEmailSenderResolver, SiteEmailSenderResolver>();
             services.AddTransient<ISiteMessageEmailSender, SiteEmailMessageSender>();
             //services.AddTransient<ISiteMessageEmailSender, FakeSiteEmailSender>();
+            services.TryAddScoped<ISendGridOptionsProvider, SiteSendGridOptionsProvider>();
+            services.TryAddScoped<IMailgunOptionsProvider, SiteMailgunOptionsProvider>();
+            services.TryAddScoped<IElasticEmailOptionsProvider, SiteElasticEmailOptionsProvider>();
+            services.AddCloudscribeEmailSenders(configuration);
             
-            services.AddTransient<ISmsSender, SiteSmsSender>();
-
             services.TryAddSingleton<IThemeListBuilder, SiteThemeListBuilder>();
             //services.AddSingleton<IRazorViewEngine, CoreViewEngine>();
             services.TryAddScoped<ViewRenderer, ViewRenderer>();
