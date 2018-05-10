@@ -10,13 +10,8 @@
  
   <ItemGroup>
     <Content Remove="appsettings.Development.json" CopyToPublishDirectory="Never" />
-    <Content Remove="bower.json" CopyToPublishDirectory="Never" />
-    <Content Remove="bundleconfig.json" CopyToPublishDirectory="Never" />
-
     <Content Include="appsettings.Development.json" CopyToPublishDirectory="Never" />
-    <Content Include="bower.json" CopyToPublishDirectory="Never" />
-    <Content Include="bundleconfig.json" CopyToPublishDirectory="Never" />
-
+    
   </ItemGroup>
 
   <ItemGroup>
@@ -28,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\cloudscribe.Core.IdentityServer.EFCore.SQLite\cloudscribe.Core.IdentityServer.EFCore.SQLite.csproj" />
     <ProjectReference Include="..\cloudscribe.Core.IdentityServerIntegration.Views.Bootstrap3\cloudscribe.Core.IdentityServerIntegration.Views.Bootstrap3.csproj" />
+    <ProjectReference Include="..\cloudscribe.Core.IdentityServerIntegration.Views.Bootstrap4\cloudscribe.Core.IdentityServerIntegration.Views.Bootstrap4.csproj" />
     <ProjectReference Include="..\cloudscribe.Core.IdentityServerIntegration\cloudscribe.Core.IdentityServerIntegration.csproj" />
     <ProjectReference Include="..\cloudscribe.Core.Identity\cloudscribe.Core.Identity.csproj" />
     <ProjectReference Include="..\cloudscribe.Core.Models\cloudscribe.Core.Models.csproj" />
@@ -37,6 +33,7 @@
     <ProjectReference Include="..\cloudscribe.Core.Storage.EFCore.SQLite\cloudscribe.Core.Storage.EFCore.SQLite.csproj" />
     <ProjectReference Include="..\cloudscribe.Core.Storage.NoDb\cloudscribe.Core.Storage.NoDb.csproj" />
     <ProjectReference Include="..\cloudscribe.Core.Web.Views.Bootstrap3\cloudscribe.Core.Web.Views.Bootstrap3.csproj" />
+    <ProjectReference Include="..\cloudscribe.Core.Web.Views.Bootstrap4\cloudscribe.Core.Web.Views.Bootstrap4.csproj" />
     <ProjectReference Include="..\cloudscribe.Core.Web\cloudscribe.Core.Web.csproj" />
     <ProjectReference Include="..\cloudscribe.Core.IdentityServer.EFCore.MSSQL\cloudscribe.Core.IdentityServer.EFCore.MSSQL.csproj" />
     <ProjectReference Include="..\cloudscribe.Core.IdentityServer.EFCore.MySql\cloudscribe.Core.IdentityServer.EFCore.MySql.csproj" />
@@ -78,6 +75,5 @@
     <DotNetCliToolReference Include="Microsoft.VisualStudio.Web.CodeGeneration.Tools" Version="2.0.*" />
   </ItemGroup>
   
-  
-
+ 
 </Project>

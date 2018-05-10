@@ -2,8 +2,8 @@
 
   <PropertyGroup>
     <Description>cloudscribe common helpers for web applications</Description>
-    <VersionPrefix>2.0.35</VersionPrefix>
-    <AssemblyVersion>2.0.35</AssemblyVersion>
+    <VersionPrefix>2.0.38</VersionPrefix>
+    <AssemblyVersion>2.0.38</AssemblyVersion>
     <Authors>Joe Audette</Authors>
     <TargetFrameworks>netstandard2.0</TargetFrameworks>
     <AssemblyName>cloudscribe.Web.Common</AssemblyName>
@@ -31,6 +31,7 @@
     <PackageReference Include="Microsoft.Extensions.FileProviders.Physical" Version="2.0.*" />
     <PackageReference Include="System.Text.Encodings.Web" Version="4.4.*" />
     <PackageReference Include="NodaTime" Version="2.2.*" />
+    <PackageReference Include="cloudscribe.HtmlAgilityPack" Version="1.0.*" />
   </ItemGroup>
 
  
